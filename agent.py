@@ -207,7 +207,9 @@ def get_proteins_for_go_terms(state: GraphState):
     """Get all proteins associated with the given GO term IDs."""
 
     with Session(engine) as session:
+        print("Before")
         go_terms = session.query(GoTerms).filter(GoTerms.id.in_(state.get("query_protein").get("go_terms"))).all()
+        print("After")
 
         return {
             "go_terms": [
@@ -218,15 +220,8 @@ def get_proteins_for_go_terms(state: GraphState):
                     "proteins": [
                         {
                             "accession": protein.accession,
-                            "taxon_id": protein.taxon_id,
                             "name": protein.name,
                             "description": protein.description,
-                            "length": protein.length,
-                            "sequence": protein.sequence,
-                            "proteome": protein.proteome,
-                            "gene": protein.gene,
-                            "go_terms": [gt.id for gt in protein.go_terms],
-                            "entities": [entity.accession for entity in protein.entities],
                         }
                         for protein in go_term.proteins
                     ]
@@ -273,13 +268,15 @@ def input_extraction(state: GraphState):
     input_extraction_model = base_model.with_structured_output(Inputs)
     system_message = """You are an input extractor. 
                 Your task is to extract structured inputs from a user request.
-                You must extract inputs into these categories: gene, accession, sequence
+                You must extract inputs into these categories: gene, accession, sequence, go_terms
                 """
     
     output = input_extraction_model.invoke(
         [SystemMessage(content=system_message),
         HumanMessage(content=state.get("query"))]
     )
+
+    print(output.go_terms)
 
     return{
         "query_protein": {
@@ -328,9 +325,9 @@ graph_builder.add_edge("get_proteins_for_go_terms", END)
 graph_builder.add_edge("blast_search", END)
 graph = graph_builder.compile()
 
-# initial_state = {
-#     "query": "Perform the blast search for A2RVM8"
-# }
+initial_state = {
+    "query": "Get me the proteins with Go terms: GO:0006508"
+}
 
-# final_state = graph.invoke(initial_state)
-# print(final_state)
+final_state = graph.invoke(initial_state)
+print(final_state)
