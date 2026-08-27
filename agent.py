@@ -9,9 +9,10 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from sqlalchemy import Column, Table, create_engine, ForeignKey, String, Integer, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, Session
-import json
 import os
 import requests
+from pgvector.sqlalchemy import Vector
+from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 database_url = os.getenv("DATABASE_URL")
@@ -31,6 +32,7 @@ class GoTerms(Base):
     category: Mapped[str] = mapped_column(String)
     entities: Mapped[list["Entity"]] = relationship(secondary="entity_to_go_term_map",back_populates="go_terms")
     proteins: Mapped[list["Protein"]] = relationship(secondary="protein_to_go_term_map",back_populates="go_terms")
+    embedding = mapped_column(Vector(384))
     
 class Literature(Base):
     __tablename__ = "literature"
@@ -162,31 +164,30 @@ class EntityState(TypedDict):
     literatures: list[LiteratureState]
     proteins: list[ProteinState]
 
+class InputQueryState(TypedDict):
+    accession: Optional[str]
+    gene: Optional[str]
+    sequence: Optional[str]
+    go_terms: Optional[list[str]]
+    go_term_function: Optional[str]
 
 class GraphState(TypedDict):
     query: str
+    inputs: InputQueryState
     query_protein: ProteinState
     go_terms: list[GoTermState]
     blast_result: list[BlastHitState]
     entities: list[EntityState]
     tool_node: str
-    
+
 
 def get_protein_data(state: GraphState):
     """Find proteins by their attributes"""
 
-    protein = state.get("query_protein")
-    field = None
-    value = None
-    for key,v in protein.items():
-        if v is not None:
-            field = key
-            value = v
-            break
+    accession = state.get("inputs").get("accession")
 
     with Session(engine) as session:
-        column = getattr(Protein, field)
-        protein = session.query(Protein).filter(column == value).first()
+        protein = session.query(Protein).filter(Protein.accession == accession).first()
 
         return {
             "query_protein": {
@@ -207,9 +208,7 @@ def get_proteins_for_go_terms(state: GraphState):
     """Get all proteins associated with the given GO term IDs."""
 
     with Session(engine) as session:
-        print("Before")
-        go_terms = session.query(GoTerms).filter(GoTerms.id.in_(state.get("query_protein").get("go_terms"))).all()
-        print("After")
+        go_terms = session.query(GoTerms).filter(GoTerms.id.in_(state.get("inputs").get("go_terms"))).all()
 
         return {
             "go_terms": [
@@ -236,11 +235,10 @@ def blast_search(state: GraphState):
 
     blast_endpoint = f"{blast_server}/blast"
 
-    query_sequence = state.get("query_protein").get("sequence")
-    if state.get("query_protein").get("sequence") is None:
+    query_sequence = state.get("inputs").get("sequence")
+    if state.get("inputs").get("sequence") is None:
         with Session(engine) as session:
-            columnn = getattr(Protein,"accession")
-            protein = session.query(Protein).filter(columnn == state.get("query_protein").get("accession")).first()
+            protein = session.query(Protein).filter(Protein.accession == state.get("inputs").get("accession")).first()
             query_sequence = protein.sequence
 
     payload = {
@@ -256,6 +254,40 @@ def blast_search(state: GraphState):
         "blast_result": result.get("blast_result")
     }
 
+def get_proteins_for_go_term_functions(state: GraphState):
+    go_term_function = state.get("inputs").get("go_term_function")
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    go_term_function_embedding = model.encode(go_term_function).tolist()
+
+    with Session(engine) as session:
+        go_terms = (
+            session.query(GoTerms,GoTerms.embedding.cosine_distance(go_term_function_embedding).label("distance")
+            ).filter(GoTerms.embedding.cosine_distance(go_term_function_embedding) < 0.3)
+            .order_by(GoTerms.embedding.cosine_distance(go_term_function_embedding)
+            ).limit(10).all()
+        )
+
+        return {
+            "go_terms": [
+                {
+                    "id": go_term.id,
+                    "name": go_term.name,
+                    "category": go_term.category,
+                    "proteins": [
+                        {
+                            "accession": protein.accession,
+                            "name": protein.name,
+                            "description": protein.description,
+                        }
+                        for protein in go_term.proteins
+                    ]
+                }
+                for go_term,distance in go_terms
+            ]
+        }
+
+
+
 def input_extraction(state: GraphState):
     query = state.get("query")
 
@@ -264,11 +296,16 @@ def input_extraction(state: GraphState):
         gene: Optional[str]
         sequence: Optional[str]
         go_terms: Optional[list[str]]
+        go_term_function: Optional[str]
+
 
     input_extraction_model = base_model.with_structured_output(Inputs)
     system_message = """You are an input extractor. 
                 Your task is to extract structured inputs from a user request.
-                You must extract inputs into these categories: gene, accession, sequence, go_terms
+                You must extract inputs into these categories: gene, accession, sequence, go_terms, go_term_functions
+                Examples of accession: A0A067E1Q0, A0A067E1J8, A0A067E1B7
+                Examples of go_terms: GO:0008760, GO:0019277 
+                Examples of go_term_functions: protein phosphorylation, cell surface receptor signaling pathway, ATP binding
                 """
     
     output = input_extraction_model.invoke(
@@ -276,26 +313,28 @@ def input_extraction(state: GraphState):
         HumanMessage(content=state.get("query"))]
     )
 
-    print(output.go_terms)
+    print(output.go_term_function)
 
     return{
-        "query_protein": {
+        "inputs": {
             "accession": output.accession,
             "gene": output.gene,
             "sequence": output.sequence,
-            "go_terms": output.go_terms
+            "go_terms": output.go_terms,
+            "go_term_function": output.go_term_function
         }
     }
 
 def router_node(state: GraphState):
     class Node(BaseModel):
-        tool_node: Literal["get_protein_data", "get_proteins_for_go_terms", "blast_search"]
+        tool_node: Literal["get_protein_data", "get_proteins_for_go_terms", "blast_search", "get_proteins_for_go_term_functions"]
 
-    tools_list = "get_protein_data, get_proteins_for_go_terms, blast_search"
+    tools_list = "get_protein_data, get_proteins_for_go_terms, blast_search, get_proteins_for_go_term_functions"
 
     tool_node_extraction_model = base_model.with_structured_output(Node)
     system_message = f"""You have to determine the node that needs to be executed based on the user request.
-                    The list of nodes is {tools_list}"""
+                    The list of nodes is {tools_list}. If go term is present in {state.get("inputs").get("go_terms")} 
+                    then choose get_proteins_for_go_terms else choose get_proteins_for_go_term_functions"""
     
     output = tool_node_extraction_model.invoke(
         [SystemMessage(content=system_message),
@@ -315,6 +354,7 @@ graph_builder.add_node("input_extraction", input_extraction)
 graph_builder.add_node("router_node", router_node)
 graph_builder.add_node("get_protein_data", get_protein_data)
 graph_builder.add_node("get_proteins_for_go_terms", get_proteins_for_go_terms)
+graph_builder.add_node("get_proteins_for_go_term_functions", get_proteins_for_go_term_functions)
 graph_builder.add_node("blast_search", blast_search)
 
 graph_builder.add_edge(START, "input_extraction")
@@ -323,10 +363,11 @@ graph_builder.add_conditional_edges("router_node", route_next)
 graph_builder.add_edge("get_protein_data", END)
 graph_builder.add_edge("get_proteins_for_go_terms", END)
 graph_builder.add_edge("blast_search", END)
+graph_builder.add_edge("get_proteins_for_go_term_functions", END)
 graph = graph_builder.compile()
 
 initial_state = {
-    "query": "Get me the proteins with Go terms: GO:0006508"
+    "query": "Which proteins are involved in ATP binding"
 }
 
 final_state = graph.invoke(initial_state)
