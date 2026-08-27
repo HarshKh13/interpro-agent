@@ -10,3 +10,5 @@ python-dotenv
 sqlalchemy
 psycopg2-binary
 requests
+sentence_transformers
+pgvector
