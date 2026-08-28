@@ -262,7 +262,7 @@ def get_proteins_for_go_term_functions(state: GraphState):
     with Session(engine) as session:
         go_terms = (
             session.query(GoTerms,GoTerms.embedding.cosine_distance(go_term_function_embedding).label("distance")
-            ).filter(GoTerms.embedding.cosine_distance(go_term_function_embedding) < 0.3)
+            ).filter(GoTerms.embedding.cosine_distance(go_term_function_embedding) < 0.5)
             .order_by(GoTerms.embedding.cosine_distance(go_term_function_embedding)
             ).limit(10).all()
         )
@@ -300,13 +300,78 @@ def input_extraction(state: GraphState):
 
 
     input_extraction_model = base_model.with_structured_output(Inputs)
-    system_message = """You are an input extractor. 
-                Your task is to extract structured inputs from a user request.
-                You must extract inputs into these categories: gene, accession, sequence, go_terms, go_term_functions
-                Examples of accession: A0A067E1Q0, A0A067E1J8, A0A067E1B7
-                Examples of go_terms: GO:0008760, GO:0019277 
-                Examples of go_term_functions: protein phosphorylation, cell surface receptor signaling pathway, ATP binding
-                """
+    system_message = """You are a bioinformatics input extraction system.Extract the biological entities and identifiers explicitly mentioned
+        or clearly expressed in the user's query.
+
+        Return the following fields:
+
+        1. accession
+        - Protein accession identifiers.
+        - Examples: A0A067E1Q0, A0A067E1J8
+
+        2. gene
+        - Gene names or gene symbols.
+
+        3. sequence
+        - Amino-acid or nucleotide sequences.
+
+        4. go_terms
+        - Explicit Gene Ontology identifiers only.
+        - Examples: GO:0006096, GO:0006915, GO:0005524
+
+        5. go_term_functions
+        - Natural-language biological concepts that can correspond to
+            Gene Ontology biological processes, molecular functions,
+            or cellular components.
+        - Extract every distinct biological concept from the query.
+
+        Examples:
+
+        User:
+        "Which proteins are involved in glycolysis"
+
+        go_term_functions:
+        ["glycolysis"]
+
+        User:
+        "Which proteins are involved in glycolysis and gluconeogenesis"
+
+        go_term_functions:
+        ["glycolysis", "gluconeogenesis"]
+
+        User:
+        "Which proteins are involved in the glucose pathway"
+
+        go_term_functions:
+        ["glucose pathway"]
+
+        User:
+        "Find proteins involved in glucose metabolism and ATP binding"
+
+        go_term_functions:
+        ["glucose metabolism", "ATP binding"]
+
+        User:
+        "Find proteins with GO:0006096"
+
+        go_terms:
+        ["GO:0006096"]
+
+        go_term_functions:
+        []
+
+        User:
+        "Find information about A0A067E1Q0"
+
+        accession:
+        "A0A067E1Q0"
+
+        go_term_functions:
+        []
+
+        Only extract information relevant to the fields above.
+        Do not generate information that is not present in the user's query.
+        """
     
     output = input_extraction_model.invoke(
         [SystemMessage(content=system_message),
@@ -326,23 +391,36 @@ def input_extraction(state: GraphState):
     }
 
 def router_node(state: GraphState):
-    class Node(BaseModel):
-        tool_node: Literal["get_protein_data", "get_proteins_for_go_terms", "blast_search", "get_proteins_for_go_term_functions"]
+    inputs = state.get("inputs", {})
 
-    tools_list = "get_protein_data, get_proteins_for_go_terms, blast_search, get_proteins_for_go_term_functions"
+    accession = inputs.get("accession")
+    gene = inputs.get("gene")
+    sequence = inputs.get("sequence")
+    go_terms = inputs.get("go_terms")
+    go_term_functions = inputs.get("go_term_function")
 
-    tool_node_extraction_model = base_model.with_structured_output(Node)
-    system_message = f"""You have to determine the node that needs to be executed based on the user request.
-                    The list of nodes is {tools_list}. If go term is present in {state.get("inputs").get("go_terms")} 
-                    then choose get_proteins_for_go_terms else choose get_proteins_for_go_term_functions"""
-    
-    output = tool_node_extraction_model.invoke(
-        [SystemMessage(content=system_message),
-        HumanMessage(content=state.get("query"))]
-    )
+    if accession or gene:
+        return {
+            "tool_node": "get_protein_data"
+        }
+
+    if sequence:
+        return {
+            "tool_node": "blast_search"
+        }
+
+    if go_terms:
+        return {
+            "tool_node": "get_proteins_for_go_terms"
+        }
+
+    if go_term_functions:
+        return {
+            "tool_node": "get_proteins_for_go_term_functions"
+        }
 
     return {
-        "tool_node": output.tool_node
+        "tool_node": None
     }
 
 def route_next(state: GraphState):
@@ -366,9 +444,9 @@ graph_builder.add_edge("blast_search", END)
 graph_builder.add_edge("get_proteins_for_go_term_functions", END)
 graph = graph_builder.compile()
 
-initial_state = {
-    "query": "Which proteins are involved in ATP binding"
-}
+# initial_state = {
+#     "query": "Which proteins are involved in heterodimerization activity"
+# }
 
-final_state = graph.invoke(initial_state)
-print(final_state)
+# final_state = graph.invoke(initial_state)
+# print(final_state)
