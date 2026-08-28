@@ -372,7 +372,7 @@ def router_node(state: GraphState):
     gene = inputs.get("gene")
     sequence = inputs.get("sequence")
     go_terms = inputs.get("go_terms")
-    go_term_functions = inputs.get("go_term_function")
+    go_term_function = inputs.get("go_term_function")
 
     if accession or gene:
         return {
@@ -389,7 +389,7 @@ def router_node(state: GraphState):
             "tool_node": "get_proteins_for_go_terms"
         }
 
-    if go_term_functions:
+    if go_term_function:
         return {
             "tool_node": "get_proteins_for_go_term_functions"
         }
@@ -424,6 +424,4 @@ graph = graph_builder.compile()
 # }
 
 # final_state = graph.invoke(initial_state)
-# print(len(final_state.get("go_terms")))
-# for go_term in final_state.get("go_terms"):
-#     print(len(go_term.get("proteins")))
+# print(final_state)
