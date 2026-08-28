@@ -279,7 +279,7 @@ def get_proteins_for_go_term_functions(state: GraphState):
                             "name": protein.name,
                             "description": protein.description,
                         }
-                        for protein in go_term.proteins
+                        for protein in go_term.proteins[:10]
                     ]
                 }
                 for go_term,distance in go_terms
@@ -330,44 +330,19 @@ def input_extraction(state: GraphState):
         User:
         "Which proteins are involved in glycolysis"
 
-        go_term_functions:
-        ["glycolysis"]
-
-        User:
-        "Which proteins are involved in glycolysis and gluconeogenesis"
-
-        go_term_functions:
-        ["glycolysis", "gluconeogenesis"]
+        go_term_functions: "glycolysis"
 
         User:
         "Which proteins are involved in the glucose pathway"
-
-        go_term_functions:
-        ["glucose pathway"]
+        go_term_function: "glucose pathway"
 
         User:
-        "Find proteins involved in glucose metabolism and ATP binding"
-
-        go_term_functions:
-        ["glucose metabolism", "ATP binding"]
+        "Find proteins involved in glucose metabolism"
+        go_term_function: "glucose metabolism"
 
         User:
         "Find proteins with GO:0006096"
-
-        go_terms:
-        ["GO:0006096"]
-
-        go_term_functions:
-        []
-
-        User:
-        "Find information about A0A067E1Q0"
-
-        accession:
-        "A0A067E1Q0"
-
-        go_term_functions:
-        []
+        go_terms: ["GO:0006096"]
 
         Only extract information relevant to the fields above.
         Do not generate information that is not present in the user's query.
@@ -445,8 +420,10 @@ graph_builder.add_edge("get_proteins_for_go_term_functions", END)
 graph = graph_builder.compile()
 
 # initial_state = {
-#     "query": "Which proteins are involved in heterodimerization activity"
+#     "query": "Which proteins are involved in ATP binding"
 # }
 
 # final_state = graph.invoke(initial_state)
-# print(final_state)
+# print(len(final_state.get("go_terms")))
+# for go_term in final_state.get("go_terms"):
+#     print(len(go_term.get("proteins")))
