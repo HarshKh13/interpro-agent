@@ -233,7 +233,6 @@ def get_proteins_for_go_terms(state: GraphState):
 def blast_search(state: GraphState):
     """Perform blast search for a protein"""
 
-    blast_endpoint = f"{blast_server}/blast"
 
     query_sequence = state.get("inputs").get("sequence")
     if state.get("inputs").get("sequence") is None:
@@ -241,17 +240,49 @@ def blast_search(state: GraphState):
             protein = session.query(Protein).filter(Protein.accession == state.get("inputs").get("accession")).first()
             query_sequence = protein.sequence
 
-    payload = {
-        "organism": "arabidopsis", 
-        "max_target_sequences":5,
-        "query_sequence": query_sequence
-    }
 
-    response = requests.post(blast_endpoint, json=payload)
-    result = response.json()
+    result = subprocess.run(
+        ["blastp", 
+        "-db", 
+        f"blast_database/arabidopsis/arabidopsis_proteins_blast_db", 
+        "-outfmt", 
+        "15", 
+        "-max_target_seqs", 
+        5],
+        input=f">query\n{blast_input.query_sequence}\n",
+        capture_output=True,
+        text=True
+    )
 
+    data = json.loads(result.stdout)
+    hits = data["BlastOutput2"][0]["report"]["results"]["search"]["hits"]
     return {
-        "blast_result": result.get("blast_result")
+        "blast_result": [
+            {
+                "accession": hit.get("description")[0].get("title"),
+                "length": hit.get("len"),
+                "hsps": [
+                    {
+                        "bit_score": hsp.get("bit_score"),
+                        "score": hsp.get("score"),
+                        "evalue": hsp.get("evalue"),
+                        "identity": hsp.get("identity"),
+                        "positive": hsp.get("positive"),
+                        "query_from": hsp.get("query_from"),
+                        "query_to": hsp.get("query_to"),
+                        "hit_from": hsp.get("hit_from"),
+                        "hit_to": hsp.get("hit_to"),
+                        "align_length": hsp.get("align_len"),
+                        "gaps": hsp.get("gaps"),
+                        "query_sequence": hsp.get("qseq"),
+                        "hit_sequence": hsp.get("hseq"),
+                        "midline": hsp.get("midline")
+                    }
+                    for hsp in hit.get("hsps")
+                ]
+            }
+            for hit in hits
+        ]
     }
 
 def get_proteins_for_go_term_functions(state: GraphState):
@@ -419,9 +450,9 @@ graph_builder.add_edge("blast_search", END)
 graph_builder.add_edge("get_proteins_for_go_term_functions", END)
 graph = graph_builder.compile()
 
-# initial_state = {
-#     "query": "Which proteins are involved in ATP binding"
-# }
+initial_state = {
+    "query": "Which proteins are involved in ATP binding"
+}
 
-# final_state = graph.invoke(initial_state)
-# print(final_state)
+final_state = graph.invoke(initial_state)
+print(final_state)
