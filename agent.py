@@ -448,9 +448,9 @@ graph_builder.add_edge("blast_search", END)
 graph_builder.add_edge("get_proteins_for_go_term_functions", END)
 graph = graph_builder.compile()
 
-initial_state = {
-    "query": "Which proteins are involved in ATP binding"
-}
+# initial_state = {
+#     "query": "Which proteins are involved in ATP binding"
+# }
 
-final_state = graph.invoke(initial_state)
-print(final_state)
+# final_state = graph.invoke(initial_state)
+# print(final_state)
