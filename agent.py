@@ -2,9 +2,6 @@ from langgraph.graph import StateGraph, START, END
 from typing import Literal, TypedDict, Annotated, Optional
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode, tools_condition
-from langchain_core.tools import tool
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from sqlalchemy import Column, Table, create_engine, ForeignKey, String, Integer, text
@@ -13,6 +10,7 @@ import os
 import requests
 from pgvector.sqlalchemy import Vector
 from sentence_transformers import SentenceTransformer
+import subprocess
 
 load_dotenv()
 database_url = os.getenv("DATABASE_URL")
