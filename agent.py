@@ -11,11 +11,11 @@ import requests
 from pgvector.sqlalchemy import Vector
 from sentence_transformers import SentenceTransformer
 import subprocess
+import json
 
 load_dotenv()
 database_url = os.getenv("DATABASE_URL")
 blast_server = os.getenv("BLAST_SERVER")
-
 
 engine = create_engine(database_url)
 
@@ -114,7 +114,7 @@ class ProteinState(TypedDict):
     taxon_id: str
     name: str
     description: str
-    length: str
+    length: int
     sequence: str
     proteome: str
     gene: str
@@ -168,6 +168,7 @@ class InputQueryState(TypedDict):
     sequence: Optional[str]
     go_terms: Optional[list[str]]
     go_term_function: Optional[str]
+    entity_accession: Optional[str]
 
 class GraphState(TypedDict):
     query: str
@@ -247,7 +248,7 @@ def blast_search(state: GraphState):
         "15", 
         "-max_target_seqs", 
         5],
-        input=f">query\n{blast_input.query_sequence}\n",
+        input=f">query\n{query_sequence}\n",
         capture_output=True,
         text=True
     )
@@ -316,6 +317,38 @@ def get_proteins_for_go_term_functions(state: GraphState):
         }
 
 
+def get_entity_information(state: GraphState):
+    entity_accession = state.get("inputs").get("entity_accession")
+
+    with Session(engine) as session:
+        entity = session.query(Entity).filter(Entity.accession == entity_accession).first()
+
+        return {
+            "entities":[
+                {
+                    "accession": entity.accession,
+                    "type": entity.type,
+                    "name": entity.name,
+                    "description": entity.description,
+                    "proteins": [
+                        {
+                            "accession": protein.accession,
+                            "name": protein.name,
+                            "description": protein.description,
+                        }
+                        for protein in entity.proteins
+                    ],
+                    "literatures": [
+                        {
+                            "title": literature.title,
+                            "url": literature.url
+                        }
+                        for literature in entity.literatures
+                    ]
+                }
+            ]
+        }
+
 
 def input_extraction(state: GraphState):
     query = state.get("query")
@@ -326,6 +359,7 @@ def input_extraction(state: GraphState):
         sequence: Optional[str]
         go_terms: Optional[list[str]]
         go_term_function: Optional[str]
+        entity_accession: Optional[str]
 
 
     input_extraction_model = base_model.with_structured_output(Inputs)
@@ -335,7 +369,6 @@ def input_extraction(state: GraphState):
         Return the following fields:
 
         1. accession
-        - Protein accession identifiers.
         - Examples: A0A067E1Q0, A0A067E1J8
 
         2. gene
@@ -354,8 +387,10 @@ def input_extraction(state: GraphState):
             or cellular components.
         - Extract every distinct biological concept from the query.
 
+        6. entity_accession
+        - Examples: IPR001164, IPR012442
+        
         Examples:
-
         User:
         "Which proteins are involved in glycolysis"
 
@@ -390,7 +425,8 @@ def input_extraction(state: GraphState):
             "gene": output.gene,
             "sequence": output.sequence,
             "go_terms": output.go_terms,
-            "go_term_function": output.go_term_function
+            "go_term_function": output.go_term_function,
+            "entity_accession": output.entity_accession
         }
     }
 
@@ -402,6 +438,7 @@ def router_node(state: GraphState):
     sequence = inputs.get("sequence")
     go_terms = inputs.get("go_terms")
     go_term_function = inputs.get("go_term_function")
+    entity_accession = inputs.get("entity_accession")
 
     if accession or gene:
         return {
@@ -422,6 +459,11 @@ def router_node(state: GraphState):
         return {
             "tool_node": "get_proteins_for_go_term_functions"
         }
+    
+    if entity_accession:
+        return {
+            "tool_node": "get_entity_information"
+        }
 
     return {
         "tool_node": None
@@ -435,6 +477,7 @@ graph_builder = StateGraph(GraphState)
 graph_builder.add_node("input_extraction", input_extraction)
 graph_builder.add_node("router_node", router_node)
 graph_builder.add_node("get_protein_data", get_protein_data)
+graph_builder.add_node("get_entity_information", get_entity_information)
 graph_builder.add_node("get_proteins_for_go_terms", get_proteins_for_go_terms)
 graph_builder.add_node("get_proteins_for_go_term_functions", get_proteins_for_go_term_functions)
 graph_builder.add_node("blast_search", blast_search)
@@ -443,13 +486,14 @@ graph_builder.add_edge(START, "input_extraction")
 graph_builder.add_edge("input_extraction", "router_node")
 graph_builder.add_conditional_edges("router_node", route_next)
 graph_builder.add_edge("get_protein_data", END)
+graph_builder.add_edge("get_entity_information", END)
 graph_builder.add_edge("get_proteins_for_go_terms", END)
 graph_builder.add_edge("blast_search", END)
 graph_builder.add_edge("get_proteins_for_go_term_functions", END)
 graph = graph_builder.compile()
 
 # initial_state = {
-#     "query": "Which proteins are involved in ATP binding"
+#     "query": "Get me the information for the entity IPR000066"
 # }
 
 # final_state = graph.invoke(initial_state)
